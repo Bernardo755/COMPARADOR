@@ -72,12 +72,18 @@
             border: 1px solid #ccc;
             flex: 1;
         }
+        .options-box {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #e8f4f8;
+            border-radius: 8px;
+            border-left: 4px solid #3498db;
+        }
         #process-section {
             display: none;
             margin-top: 30px;
-            text-align: center;
         }
-        .status { margin-top: 15px; font-weight: bold; color: #27ae60; }
+        .status { margin-top: 15px; font-weight: bold; color: #27ae60; text-align: center;}
     </style>
 </head>
 <body>
@@ -100,29 +106,38 @@
         <button id="btn-load" onclick="cargarArchivos()">Cargar Archivos y Leer Columnas</button>
     </div>
 
-    <!-- Esta sección se muestra después de cargar los archivos -->
     <div id="process-section">
-        <h2>¿Qué columnas coinciden? (Reglas de cruce)</h2>
+        <h2 style="text-align: center;">¿Qué columnas coinciden? (Reglas de cruce)</h2>
         <div id="rules-wrapper" class="rules-container">
             <!-- Las reglas dinámicas aparecerán aquí -->
         </div>
         
-        <div style="display: flex; justify-content: space-between; margin-top: 20px;">
+        <div style="text-align: right; margin-top: 10px;">
             <button class="btn-secondary" onclick="agregarRegla()">+ Agregar otro cruce</button>
-            <button onclick="procesarYDescargar()">Comparar y Descargar Resultado</button>
+        </div>
+
+        <!-- NUEVA SECCIÓN DE OPCIONES DE CRUCE -->
+        <div class="options-box">
+            <label for="tipo-cruce"><strong>¿Qué datos deseas descargar en el resultado final?</strong></label>
+            <select id="tipo-cruce" style="width: 100%; margin-top: 10px;">
+                <option value="estricto">Cruce estricto: Solo descargar las filas que tuvieron coincidencia</option>
+                <option value="flexible">Cruce flexible: Conservar todo el Excel 1 (y marcar los que no cruzaron)</option>
+            </select>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px;">
+            <button onclick="procesarYDescargar()" style="font-size: 16px; padding: 12px 24px;">Comparar y Descargar Resultado</button>
         </div>
         <div id="status-msg" class="status"></div>
     </div>
 </div>
 
 <script>
-    // Variables globales para almacenar los datos en memoria
     let dataFile1 = [];
     let dataFile2 = [];
     let headersFile1 = [];
     let headersFile2 = [];
 
-    // Función para leer un archivo y convertirlo a JSON
     async function leerExcel(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -131,8 +146,6 @@
                 const workbook = XLSX.read(data, { type: 'array' });
                 const firstSheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[firstSheetName];
-                
-                // Convertir a JSON, la primera fila será las llaves (cabeceras)
                 const jsonData = XLSX.utils.sheet_to_json(worksheet);
                 resolve(jsonData);
             };
@@ -154,7 +167,6 @@
         document.getElementById('btn-load').disabled = true;
 
         try {
-            // Leer ambos archivos
             dataFile1 = await leerExcel(file1);
             dataFile2 = await leerExcel(file2);
 
@@ -162,15 +174,12 @@
                 throw new Error("Uno de los archivos está vacío.");
             }
 
-            // Extraer las cabeceras (nombres de las columnas) del primer objeto
             headersFile1 = Object.keys(dataFile1[0]);
             headersFile2 = Object.keys(dataFile2[0]);
 
-            // Mostrar la sección de cruces
             document.getElementById('process-section').style.display = "block";
-            document.getElementById('rules-wrapper').innerHTML = ""; // Limpiar reglas previas
+            document.getElementById('rules-wrapper').innerHTML = ""; 
             
-            // Agregar la primera regla por defecto
             agregarRegla();
 
         } catch (error) {
@@ -183,9 +192,8 @@
 
     function agregarRegla() {
         const wrapper = document.getElementById('rules-wrapper');
-        const ruleId = Date.now(); // ID único para la regla
+        const ruleId = Date.now(); 
 
-        // Generar opciones para los selects
         const options1 = headersFile1.map(h => `<option value="${h}">${h}</option>`).join('');
         const options2 = headersFile2.map(h => `<option value="${h}">${h}</option>`).join('');
 
@@ -209,7 +217,6 @@
         const msg = document.getElementById('status-msg');
         msg.innerText = "Procesando...";
         
-        // 1. Obtener todas las reglas creadas en la interfaz
         const reglas = [];
         document.querySelectorAll('.rule-row').forEach(row => {
             const col1 = row.querySelector('.col-file1').value;
@@ -222,12 +229,12 @@
             return;
         }
 
-        // 2. Lógica del Cruce (Hash Map para máxima velocidad)
-        // Agrupamos el Excel 2 usando como "Llave" la combinación de columnas elegidas
+        // Leer la opción seleccionada por el usuario
+        const tipoCruce = document.getElementById('tipo-cruce').value;
+
         const mapaExcel2 = new Map();
         
         dataFile2.forEach(fila2 => {
-            // Creamos un string único para cada fila basado en las reglas. Ej: "Id123|||juan@mail.com"
             const llaveCruce = reglas.map(r => fila2[r.col2]).join('|||');
             
             if (!mapaExcel2.has(llaveCruce)) {
@@ -236,35 +243,42 @@
             mapaExcel2.get(llaveCruce).push(fila2);
         });
 
-        // 3. Buscar coincidencias en Excel 1
         const resultadoFinal = [];
+        let contadorExito = 0;
+        let contadorFallo = 0;
 
         dataFile1.forEach(fila1 => {
             const llaveCruce = reglas.map(r => fila1[r.col1]).join('|||');
 
             if (mapaExcel2.has(llaveCruce)) {
-                // Hubo coincidencia. Unimos los datos.
+                // SÍ HUBO COINCIDENCIA
                 const filasCoincidentes = mapaExcel2.get(llaveCruce);
                 
                 filasCoincidentes.forEach(fila2 => {
-                    let nuevaFila = { ...fila1 }; // Copiamos datos del Excel 1
+                    let nuevaFila = { ...fila1 }; 
                     
-                    // Añadimos datos del Excel 2 (con prefijo F2_ para evitar sobreescribir si tienen el mismo nombre de columna)
                     for (let key in fila2) {
                         nuevaFila[`F2_${key}`] = fila2[key];
                     }
+                    
+                    nuevaFila["ESTADO_DEL_CRUCE"] = "✅ Encontrado";
                     resultadoFinal.push(nuevaFila);
+                    contadorExito++;
                 });
             } else {
-                // OPCIONAL: Si quieres que los que NO coinciden también salgan, descomenta la siguiente línea:
-                // resultadoFinal.push({ ...fila1, Estado_Cruce: "No encontrado en Excel 2" });
+                // NO HUBO COINCIDENCIA
+                if (tipoCruce === "flexible") {
+                    let nuevaFila = { ...fila1 };
+                    nuevaFila["ESTADO_DEL_CRUCE"] = "❌ No existe en Excel 2";
+                    resultadoFinal.push(nuevaFila);
+                    contadorFallo++;
+                }
             }
         });
 
-        // 4. Generar el nuevo Excel y descargar
         if (resultadoFinal.length === 0) {
             msg.innerText = "";
-            alert("No se encontraron coincidencias con las reglas actuales.");
+            alert("No se encontraron coincidencias y se seleccionó el cruce estricto.");
             return;
         }
 
@@ -274,7 +288,11 @@
         
         XLSX.writeFile(nuevoLibro, "Excel_Cruzado_Final.xlsx");
         
-        msg.innerText = `¡Éxito! Se cruzaron ${resultadoFinal.length} filas y el archivo se ha descargado.`;
+        if (tipoCruce === "estricto") {
+            msg.innerText = `¡Éxito! Se descargaron ${contadorExito} filas con coincidencias exactas.`;
+        } else {
+            msg.innerText = `¡Éxito! Descarga lista. Coincidencias: ${contadorExito} | Sin cruzar: ${contadorFallo}`;
+        }
     }
 </script>
 
