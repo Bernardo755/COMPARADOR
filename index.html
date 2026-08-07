@@ -483,6 +483,9 @@
     // ==========================================
     // LOGICA MÓDULO 3: UNIR CARPETA
     // ==========================================
+    // ==========================================
+    // LOGICA MÓDULO 3: UNIR CARPETA
+    // ==========================================
     async function procesarCarpetaYDescargar() {
         const inputFiles = document.getElementById('folder-input').files;
         const msg = document.getElementById('status-folder-msg');
@@ -514,6 +517,9 @@
         let datosUnidos = [];
         let successCount = 0;
         let erroresLogs = [];
+        
+        // NUEVO: Usaremos un Set para guardar el orden exacto de las columnas originales
+        let encabezadosGlobales = new Set(); 
 
         for (const file of excelFiles) {
             try {
@@ -528,12 +534,23 @@
                 const workbook = XLSX.read(buffer, { type: 'array' });
                 const primerHoja = workbook.Sheets[workbook.SheetNames[0]];
 
-                const jsonData = XLSX.utils.sheet_to_json(primerHoja, { defval: "", range: filasASaltar });
-
-                if (jsonData.length === 0) {
+                // NUEVO: Leemos primero como "arreglo" para extraer el orden exacto de los encabezados de este archivo
+                const datosComoArreglo = XLSX.utils.sheet_to_json(primerHoja, { header: 1, range: filasASaltar });
+                if (datosComoArreglo.length === 0) {
                     erroresLogs.push(`<li><strong>${file.name}:</strong> Está vacío a partir de la fila ${filaEncabezado}.</li>`);
                     continue;
                 }
+                
+                // Guardamos los encabezados respetando su orden de aparición
+                const encabezadosDeEsteArchivo = datosComoArreglo[0];
+                encabezadosDeEsteArchivo.forEach(col => {
+                    if (col !== undefined && col !== null && col !== "") {
+                        encabezadosGlobales.add(col);
+                    }
+                });
+
+                // Leemos los datos normalmente
+                const jsonData = XLSX.utils.sheet_to_json(primerHoja, { defval: "", range: filasASaltar });
 
                 jsonData.forEach(fila => {
                     fila["Nombre del Libro"] = nombreSinExt;
@@ -549,7 +566,15 @@
         }
 
         if (datosUnidos.length > 0) {
-            const nuevaHojaUnida = XLSX.utils.json_to_sheet(datosUnidos);
+            // NUEVO: Agregamos las columnas de metadatos al final del orden de columnas
+            encabezadosGlobales.add("Nombre del Libro");
+            encabezadosGlobales.add("Subcarpeta");
+            encabezadosGlobales.add("Ruta");
+
+            // NUEVO: Forzamos a la librería a construir el Excel respetando nuestro arreglo de encabezadosGlobales
+            const arregloEncabezados = Array.from(encabezadosGlobales);
+            const nuevaHojaUnida = XLSX.utils.json_to_sheet(datosUnidos, { header: arregloEncabezados });
+            
             const libroUnido = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(libroUnido, nuevaHojaUnida, "Datos Unidos");
             XLSX.writeFile(libroUnido, "Carpeta_Unida_Final.xlsx");
