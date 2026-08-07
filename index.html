@@ -190,12 +190,19 @@
                 <label for="col-verificar"><strong>1. Columna para verificar la duplicidad (Ej. IDs, Correos):</strong></label>
                 <select id="col-verificar" style="width: 100%; margin-top: 10px; margin-bottom: 20px;"></select>
                 
+                <!-- Evento agregado onchange para actualizar el 3er select -->
                 <label for="col-tipo"><strong>2. Columna que contiene los 'Tipos' (Para separar en hojas):</strong></label>
-                <select id="col-tipo" style="width: 100%; margin-top: 10px;"></select>
+                <select id="col-tipo" style="width: 100%; margin-top: 10px;" onchange="actualizarValoresEstatus()"></select>
+                
+                <!-- TERCER SELECTOR (NUEVO) -->
+                <div style="margin-top: 25px; padding-top: 15px; border-top: 1px dashed #3498db;">
+                    <label for="val-estatus"><strong>3. Selecciona el Tipo/Estatus que deseas conservar en la tabla original:</strong><br><small>(La hoja original se limpiará de duplicados y conservará solo los valores únicos de este tipo)</small></label>
+                    <select id="val-estatus" style="width: 100%; margin-top: 10px;"></select>
+                </div>
             </div>
             
             <div style="text-align: center; margin-top: 30px;">
-                <button onclick="procesarDuplicadosYDescargar()" style="font-size: 16px; padding: 12px 24px;">Filtrar Duplicados y Descargar</button>
+                <button onclick="procesarDuplicadosYDescargar()" style="font-size: 16px; padding: 12px 24px;">Filtrar, Separar y Descargar</button>
             </div>
             <div id="status-dup-msg" class="status"></div>
         </div>
@@ -216,7 +223,6 @@
         <div class="file-section" style="margin-top: 20px;">
             <div class="file-box" style="flex: 1;">
                 <h3>Selecciona la carpeta principal</h3>
-                <!-- Los atributos webkitdirectory directory multiple permiten elegir carpetas -->
                 <input type="file" id="folder-input" webkitdirectory directory multiple>
             </div>
         </div>
@@ -375,6 +381,9 @@
             document.getElementById('col-verificar').innerHTML = options;
             document.getElementById('col-tipo').innerHTML = options;
 
+            // Actualizar el 3er selector dinámicamente según la columna elegida por defecto
+            actualizarValoresEstatus();
+
             document.getElementById('process-dup-section').style.display = "block";
             document.getElementById('status-dup-msg').innerText = "";
         } catch (error) { alert("Hubo un error: " + error.message);
@@ -384,31 +393,91 @@
         }
     }
 
+    // NUEVA FUNCIÓN: Extrae los valores únicos de la columna de tipos seleccionada
+    function actualizarValoresEstatus() {
+        const colTipo = document.getElementById('col-tipo').value;
+        const selectEstatus = document.getElementById('val-estatus');
+        
+        if (!colTipo || dataDup.length === 0) return;
+        
+        const unicos = new Set();
+        dataDup.forEach(f => {
+            if (f[colTipo] !== undefined && f[colTipo] !== "") {
+                unicos.add(f[colTipo]);
+            }
+        });
+        
+        // Agregar opción de mantener TODOS los únicos (por si el usuario cambia de opinión)
+        let htmlOptions = `<option value="*TODOS*">-- Conservar TODOS los valores únicos (Ignorar filtro) --</option>`;
+        
+        // Poblar el dropdown con los valores detectados
+        Array.from(unicos).forEach(val => {
+            htmlOptions += `<option value="${val}">${val}</option>`;
+        });
+        
+        selectEstatus.innerHTML = htmlOptions;
+    }
+
     function procesarDuplicadosYDescargar() {
         const colDup = document.getElementById('col-verificar').value;
         const colTipo = document.getElementById('col-tipo').value;
+        const estatusConservar = document.getElementById('val-estatus').value;
+        
         const msg = document.getElementById('status-dup-msg');
         msg.innerText = "Procesando...";
 
+        // 1. Contar coincidencias
         const conteo = {};
-        dataDup.forEach(f => { if(f[colDup]) conteo[f[colDup]] = (conteo[f[colDup]] || 0) + 1; });
-
-        const filasDup = dataDup.filter(f => conteo[f[colDup]] > 1);
-        if (filasDup.length === 0) return alert("No hay duplicados.");
-
-        const grupos = {};
-        filasDup.forEach(f => {
-            let tipo = f[colTipo] || "Sin Tipo";
-            let seguro = tipo.toString().replace(/[\\\/*?:\[\]]/g, '_').substring(0, 31);
-            if (!grupos[seguro]) grupos[seguro] = [];
-            grupos[seguro].push(f);
+        dataDup.forEach(f => { 
+            if(f[colDup] !== undefined && f[colDup] !== "") {
+                conteo[f[colDup]] = (conteo[f[colDup]] || 0) + 1; 
+            }
         });
 
+        const gruposDuplicados = {};
+        const originalesConservados = [];
+
+        // 2. Separar lógica (Duplicados vs Únicos Conservados)
+        dataDup.forEach(f => {
+            const idValue = f[colDup];
+            if (idValue === undefined || idValue === "") return;
+
+            if (conteo[idValue] > 1) {
+                // ES UN DUPLICADO: Se va a la hoja correspondiente a su "Tipo"
+                let tipo = f[colTipo] || "Sin Tipo";
+                let seguro = tipo.toString().replace(/[\\\/*?:\[\]]/g, '_').substring(0, 31);
+                
+                if (!gruposDuplicados[seguro]) gruposDuplicados[seguro] = [];
+                gruposDuplicados[seguro].push(f);
+            } else {
+                // ES UN VALOR ÚNICO: ¿Coincide con el Estatus que el usuario quiere conservar?
+                let tipoFila = f[colTipo];
+                
+                if (estatusConservar === "*TODOS*") {
+                    originalesConservados.push(f); // Guarda todos los únicos
+                } else if (String(tipoFila) === String(estatusConservar)) {
+                    originalesConservados.push(f); // Guarda solo los únicos de este Estatus
+                }
+            }
+        });
+
+        // 3. Crear el libro
         const nuevoLibro = XLSX.utils.book_new();
-        Object.keys(grupos).forEach(tipo => XLSX.utils.book_append_sheet(nuevoLibro, XLSX.utils.json_to_sheet(grupos[tipo]), tipo));
-        XLSX.writeFile(nuevoLibro, "Duplicados_Por_Tipo.xlsx");
+
+        // 3.1 Añadir la hoja Original (Solo únicos filtrados)
+        const hojaOriginal = XLSX.utils.json_to_sheet(originalesConservados.length > 0 ? originalesConservados : [{"Mensaje": "No se encontraron valores únicos con el estatus seleccionado."}]);
+        XLSX.utils.book_append_sheet(nuevoLibro, hojaOriginal, "Original (Únicos)");
+
+        // 3.2 Añadir las hojas de duplicados separados
+        let totalHojasDup = 0;
+        Object.keys(gruposDuplicados).forEach(tipo => {
+            XLSX.utils.book_append_sheet(nuevoLibro, XLSX.utils.json_to_sheet(gruposDuplicados[tipo]), tipo);
+            totalHojasDup++;
+        });
+
+        XLSX.writeFile(nuevoLibro, "Archivo_Filtrado_y_Separado.xlsx");
         
-        msg.innerText = `¡Éxito! ${filasDup.length} duplicados separados en ${Object.keys(grupos).length} hojas.`;
+        msg.innerText = `¡Éxito! Se conservaron ${originalesConservados.length} valores únicos en la tabla original, y se separaron los duplicados en ${totalHojasDup} hojas distintas.`;
     }
 
     // ==========================================
@@ -420,7 +489,6 @@
         const errorList = document.getElementById('folder-errors');
         const btn = document.getElementById('btn-process-folder');
         
-        // El usuario indica la fila humana (ej 1), para SheetJS 'range' le restamos 1 para saltar filas
         const filaEncabezado = parseInt(document.getElementById('header-row').value) || 1;
         const filasASaltar = Math.max(0, filaEncabezado - 1);
 
@@ -433,7 +501,6 @@
         errorList.style.display = "none";
         errorList.innerHTML = "";
 
-        // Filtrar solo extensiones de excel
         const validos = ['.xlsx', '.xls', '.csv'];
         const excelFiles = Array.from(inputFiles).filter(f => validos.some(ext => f.name.toLowerCase().endsWith(ext)));
 
@@ -441,7 +508,7 @@
             btn.disabled = false;
             btn.innerText = "Unir Todos y Descargar";
             msg.innerText = "";
-            return alert("No se encontraron archivos de Excel (.xlsx, .xls) ni CSV en la carpeta seleccionada.");
+            return alert("No se encontraron archivos de Excel (.xlsx, .xls) ni CSV.");
         }
 
         let datosUnidos = [];
@@ -450,32 +517,24 @@
 
         for (const file of excelFiles) {
             try {
-                // 1. Obtener Metadatos de la ruta
-                // webkitRelativePath contiene la ruta: "CarpetaPrincipal/Subcarpeta/Archivo.xlsx"
                 const rutaCompleta = file.webkitRelativePath || file.name;
                 const partesRuta = rutaCompleta.split('/');
                 
-                const nombreArchivoConExt = partesRuta.pop(); // Ultimo elemento (el archivo)
+                const nombreArchivoConExt = partesRuta.pop(); 
                 const nombreSinExt = nombreArchivoConExt.substring(0, nombreArchivoConExt.lastIndexOf('.')) || nombreArchivoConExt;
-                
-                // Si la longitud es > 0, significa que estaba dentro de una subcarpeta
                 const subcarpeta = partesRuta.length > 0 ? partesRuta[partesRuta.length - 1] : "Carpeta Raíz";
 
-                // 2. Leer Excel
                 const buffer = await leerExcelComoBuffer(file);
                 const workbook = XLSX.read(buffer, { type: 'array' });
                 const primerHoja = workbook.Sheets[workbook.SheetNames[0]];
 
-                // 3. Convertir a JSON (Al hacerlo, SheetJS quita los filtros automáticamente y extrae todo)
-                // range: aplica a partir de que fila empiezan los encabezados
                 const jsonData = XLSX.utils.sheet_to_json(primerHoja, { defval: "", range: filasASaltar });
 
                 if (jsonData.length === 0) {
-                    erroresLogs.push(`<li><strong>${file.name}:</strong> Está vacío o no tiene datos a partir de la fila ${filaEncabezado}.</li>`);
+                    erroresLogs.push(`<li><strong>${file.name}:</strong> Está vacío a partir de la fila ${filaEncabezado}.</li>`);
                     continue;
                 }
 
-                // 4. Agregar a cada fila los 3 datos extra solicitados
                 jsonData.forEach(fila => {
                     fila["Nombre del Libro"] = nombreSinExt;
                     fila["Subcarpeta"] = subcarpeta;
@@ -489,7 +548,6 @@
             }
         }
 
-        // Resultado Final
         if (datosUnidos.length > 0) {
             const nuevaHojaUnida = XLSX.utils.json_to_sheet(datosUnidos);
             const libroUnido = XLSX.utils.book_new();
@@ -503,7 +561,6 @@
             msg.innerText = "No se logró extraer ningún dato de la carpeta.";
         }
 
-        // Mostrar reporte de errores o archivos no procesados
         if (erroresLogs.length > 0) {
             errorList.style.display = "block";
             errorList.innerHTML = `<li style="list-style:none; margin-bottom:8px; font-weight:bold;">Archivos no procesados / con error (${erroresLogs.length}):</li>` + erroresLogs.join('');
