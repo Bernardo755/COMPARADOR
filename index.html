@@ -190,13 +190,11 @@
                 <label for="col-verificar"><strong>1. Columna para verificar la duplicidad (Ej. IDs, Correos):</strong></label>
                 <select id="col-verificar" style="width: 100%; margin-top: 10px; margin-bottom: 20px;"></select>
                 
-                <!-- Evento agregado onchange para actualizar el 3er select -->
                 <label for="col-tipo"><strong>2. Columna que contiene los 'Tipos' (Para separar en hojas):</strong></label>
                 <select id="col-tipo" style="width: 100%; margin-top: 10px;" onchange="actualizarValoresEstatus()"></select>
                 
-                <!-- TERCER SELECTOR (NUEVO) -->
                 <div style="margin-top: 25px; padding-top: 15px; border-top: 1px dashed #3498db;">
-                    <label for="val-estatus"><strong>3. Selecciona el Tipo/Estatus que deseas conservar en la tabla original:</strong><br><small>(La hoja original se limpiará de duplicados y conservará solo los valores únicos de este tipo)</small></label>
+                    <label for="val-estatus"><strong>3. Selecciona el Tipo/Estatus que deseas conservar en la tabla original:</strong><br><small>(La hoja original conservará solo los valores únicos de este tipo. Los duplicados se moverán a su hoja respectiva)</small></label>
                     <select id="val-estatus" style="width: 100%; margin-top: 10px;"></select>
                 </div>
             </div>
@@ -365,6 +363,8 @@
     // LOGICA MÓDULO 2: SEPARAR DUPLICADOS
     // ==========================================
     let dataDup = [];
+    let originalHeadersDup = [];
+
     async function cargarArchivoDuplicados() {
         const file = document.getElementById('file-dup').files[0];
         if (!file) return alert("Por favor, selecciona un archivo.");
@@ -374,26 +374,33 @@
 
         try {
             const buffer = await leerExcelComoBuffer(file);
-            dataDup = XLSX.utils.sheet_to_json(XLSX.read(buffer, {type:'array'}).Sheets[XLSX.read(buffer, {type:'array'}).SheetNames[0]], {defval:""});
+            const workbook = XLSX.read(buffer, {type:'array'});
+            const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+            // Extraer el orden exacto de los encabezados originales
+            const rawArray = XLSX.utils.sheet_to_json(sheet, {header: 1, defval:""});
+            if (rawArray.length === 0) throw new Error("El archivo está vacío.");
+            originalHeadersDup = rawArray[0].filter(h => h !== undefined && h !== null && h !== "");
+
+            dataDup = XLSX.utils.sheet_to_json(sheet, {defval:""});
             if (dataDup.length === 0) throw new Error("El archivo está vacío.");
 
-            const options = Object.keys(dataDup[0]).map(h => `<option value="${h}">${h}</option>`).join('');
+            const options = originalHeadersDup.map(h => `<option value="${h}">${h}</option>`).join('');
             document.getElementById('col-verificar').innerHTML = options;
             document.getElementById('col-tipo').innerHTML = options;
 
-            // Actualizar el 3er selector dinámicamente según la columna elegida por defecto
             actualizarValoresEstatus();
 
             document.getElementById('process-dup-section').style.display = "block";
             document.getElementById('status-dup-msg').innerText = "";
-        } catch (error) { alert("Hubo un error: " + error.message);
+        } catch (error) { 
+            alert("Hubo un error: " + error.message);
         } finally {
             document.getElementById('btn-load-dup').innerText = "Leer Columnas";
             document.getElementById('btn-load-dup').disabled = false;
         }
     }
 
-    // NUEVA FUNCIÓN: Extrae los valores únicos de la columna de tipos seleccionada
     function actualizarValoresEstatus() {
         const colTipo = document.getElementById('col-tipo').value;
         const selectEstatus = document.getElementById('val-estatus');
@@ -407,10 +414,8 @@
             }
         });
         
-        // Agregar opción de mantener TODOS los únicos (por si el usuario cambia de opinión)
         let htmlOptions = `<option value="*TODOS*">-- Conservar TODOS los valores únicos (Ignorar filtro) --</option>`;
         
-        // Poblar el dropdown con los valores detectados
         Array.from(unicos).forEach(val => {
             htmlOptions += `<option value="${val}">${val}</option>`;
         });
@@ -426,7 +431,7 @@
         const msg = document.getElementById('status-dup-msg');
         msg.innerText = "Procesando...";
 
-        // 1. Contar coincidencias
+        // 1. Contar coincidencias de duplicidad
         const conteo = {};
         dataDup.forEach(f => { 
             if(f[colDup] !== undefined && f[colDup] !== "") {
@@ -437,52 +442,53 @@
         const gruposDuplicados = {};
         const originalesConservados = [];
 
-        // 2. Separar lógica (Duplicados vs Únicos Conservados)
+        // 2. Separar lógica (Duplicados vs Únicos)
         dataDup.forEach(f => {
             const idValue = f[colDup];
             if (idValue === undefined || idValue === "") return;
 
             if (conteo[idValue] > 1) {
-                // ES UN DUPLICADO: Se va a la hoja correspondiente a su "Tipo"
+                // ES UN DUPLICADO: Se mueve a su hoja de tipo correspondiente (no se elimina)
                 let tipo = f[colTipo] || "Sin Tipo";
                 let seguro = tipo.toString().replace(/[\\\/*?:\[\]]/g, '_').substring(0, 31);
                 
                 if (!gruposDuplicados[seguro]) gruposDuplicados[seguro] = [];
                 gruposDuplicados[seguro].push(f);
             } else {
-                // ES UN VALOR ÚNICO: ¿Coincide con el Estatus que el usuario quiere conservar?
+                // ES UN VALOR ÚNICO: Se evalúa si coincide con el estatus a conservar
                 let tipoFila = f[colTipo];
                 
                 if (estatusConservar === "*TODOS*") {
-                    originalesConservados.push(f); // Guarda todos los únicos
+                    originalesConservados.push(f);
                 } else if (String(tipoFila) === String(estatusConservar)) {
-                    originalesConservados.push(f); // Guarda solo los únicos de este Estatus
+                    originalesConservados.push(f);
                 }
             }
         });
 
-        // 3. Crear el libro
+        // 3. Crear el libro de Excel respetando el orden original de las columnas
         const nuevoLibro = XLSX.utils.book_new();
 
-        // 3.1 Añadir la hoja Original (Solo únicos filtrados)
-        const hojaOriginal = XLSX.utils.json_to_sheet(originalesConservados.length > 0 ? originalesConservados : [{"Mensaje": "No se encontraron valores únicos con el estatus seleccionado."}]);
+        // 3.1 Hoja Original (Solo únicos filtrados)
+        const hojaOriginal = XLSX.utils.json_to_sheet(
+            originalesConservados.length > 0 ? originalesConservados : [{"Mensaje": "No se encontraron valores únicos con el estatus seleccionado."}],
+            { header: originalHeadersDup }
+        );
         XLSX.utils.book_append_sheet(nuevoLibro, hojaOriginal, "Original (Únicos)");
 
-        // 3.2 Añadir las hojas de duplicados separados
+        // 3.2 Hojas de duplicados separados
         let totalHojasDup = 0;
         Object.keys(gruposDuplicados).forEach(tipo => {
-            XLSX.utils.book_append_sheet(nuevoLibro, XLSX.utils.json_to_sheet(gruposDuplicados[tipo]), tipo);
+            const hojaDup = XLSX.utils.json_to_sheet(gruposDuplicados[tipo], { header: originalHeadersDup });
+            XLSX.utils.book_append_sheet(nuevoLibro, hojaDup, tipo);
             totalHojasDup++;
         });
 
         XLSX.writeFile(nuevoLibro, "Archivo_Filtrado_y_Separado.xlsx");
         
-        msg.innerText = `¡Éxito! Se conservaron ${originalesConservados.length} valores únicos en la tabla original, y se separaron los duplicados en ${totalHojasDup} hojas distintas.`;
+        msg.innerText = `¡Éxito! Se conservaron ${originalesConservados.length} valores únicos en la tabla original, y se separaron los duplicados en ${totalHojasDup} hojas distintas (respetando orden de columnas).`;
     }
 
-    // ==========================================
-    // LOGICA MÓDULO 3: UNIR CARPETA
-    // ==========================================
     // ==========================================
     // LOGICA MÓDULO 3: UNIR CARPETA
     // ==========================================
@@ -518,7 +524,6 @@
         let successCount = 0;
         let erroresLogs = [];
         
-        // NUEVO: Usaremos un Set para guardar el orden exacto de las columnas originales
         let encabezadosGlobales = new Set(); 
 
         for (const file of excelFiles) {
@@ -534,14 +539,12 @@
                 const workbook = XLSX.read(buffer, { type: 'array' });
                 const primerHoja = workbook.Sheets[workbook.SheetNames[0]];
 
-                // NUEVO: Leemos primero como "arreglo" para extraer el orden exacto de los encabezados de este archivo
                 const datosComoArreglo = XLSX.utils.sheet_to_json(primerHoja, { header: 1, range: filasASaltar });
                 if (datosComoArreglo.length === 0) {
                     erroresLogs.push(`<li><strong>${file.name}:</strong> Está vacío a partir de la fila ${filaEncabezado}.</li>`);
                     continue;
                 }
                 
-                // Guardamos los encabezados respetando su orden de aparición
                 const encabezadosDeEsteArchivo = datosComoArreglo[0];
                 encabezadosDeEsteArchivo.forEach(col => {
                     if (col !== undefined && col !== null && col !== "") {
@@ -549,7 +552,6 @@
                     }
                 });
 
-                // Leemos los datos normalmente
                 const jsonData = XLSX.utils.sheet_to_json(primerHoja, { defval: "", range: filasASaltar });
 
                 jsonData.forEach(fila => {
@@ -566,12 +568,10 @@
         }
 
         if (datosUnidos.length > 0) {
-            // NUEVO: Agregamos las columnas de metadatos al final del orden de columnas
             encabezadosGlobales.add("Nombre del Libro");
             encabezadosGlobales.add("Subcarpeta");
             encabezadosGlobales.add("Ruta");
 
-            // NUEVO: Forzamos a la librería a construir el Excel respetando nuestro arreglo de encabezadosGlobales
             const arregloEncabezados = Array.from(encabezadosGlobales);
             const nuevaHojaUnida = XLSX.utils.json_to_sheet(datosUnidos, { header: arregloEncabezados });
             
